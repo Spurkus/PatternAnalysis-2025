@@ -2,7 +2,8 @@
 Originally written by Yongming Rao, Wenliang Zhao, Zheng Zhu, Jiwen Lu, Jie Zhou;
 and modified for Alzheimer's Disease recognition.
 
-https://github.com/raoyongming/GFNet/
+Utilises the GFNet architecture as described in:
+https://github.com/raoyongming/GFNet/blob/master/gfnet.py
 """
 
 import math
