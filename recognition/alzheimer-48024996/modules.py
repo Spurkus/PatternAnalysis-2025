@@ -27,6 +27,9 @@ class Mlp(nn.Module):
         act_layer=nn.GELU,
         drop=0.0,
     ):
+        """
+        Initialize the MLP block with two linear layers and an activation function.
+        """
         super().__init__()
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
@@ -36,6 +39,9 @@ class Mlp(nn.Module):
         self.drop = nn.Dropout(drop)
 
     def forward(self, x):
+        """
+        Forward pass through the MLP block via two linear layers with activation and dropout.
+        """
         x = self.fc1(x)
         x = self.act(x)
         x = self.drop(x)
@@ -50,6 +56,9 @@ class GlobalFilter(nn.Module):
     """
 
     def __init__(self, dim, h=14, w=8):
+        """
+        Initialize the GlobalFilter with learnable complex weights.
+        """
         super().__init__()
         self.complex_weight = nn.Parameter(
             torch.randn(h, w, dim, 2, dtype=torch.float32) * 0.02
@@ -58,6 +67,9 @@ class GlobalFilter(nn.Module):
         self.h = h
 
     def forward(self, x, spatial_size=None):
+        """
+        Forward pass applying 2D Fourier Transform, filtering, and inverse transform.
+        """
         B, N, C = x.shape
         if spatial_size is None:
             a = b = int(math.sqrt(N))
@@ -98,6 +110,9 @@ class BlockLayerScale(nn.Module):
         w=8,
         init_values=1e-5,
     ):
+        """
+        Initialize the GFNet block with LayerNorm, GlobalFilter, MLP, and LayerScale.
+        """
         super().__init__()
         self.norm1 = norm_layer(dim)
         self.filter = GlobalFilter(dim, h=h, w=w)
@@ -113,6 +128,9 @@ class BlockLayerScale(nn.Module):
         self.gamma = nn.Parameter(init_values * torch.ones((dim)), requires_grad=True)
 
     def forward(self, x):
+        """
+        Forward pass through the GFNet block with LayerScale.
+        """
         x = x + self.drop_path(
             self.gamma * self.mlp(self.norm2(self.filter(self.norm1(x))))
         )
@@ -125,6 +143,9 @@ class PatchEmbed(nn.Module):
     """
 
     def __init__(self, img_size=224, patch_size=16, in_chans=3, embed_dim=768):
+        """
+        Initialize the Patch Embedding layer.
+        """
         super().__init__()
         img_size = to_2tuple(img_size)
         patch_size = to_2tuple(patch_size)
@@ -138,6 +159,9 @@ class PatchEmbed(nn.Module):
         )
 
     def forward(self, x):
+        """
+        Forward pass to convert image to patch embeddings.
+        """
         B, C, H, W = x.shape
         assert (
             H == self.img_size[0] and W == self.img_size[1]
@@ -153,11 +177,17 @@ class DownLayer(nn.Module):
     """
 
     def __init__(self, img_size=56, dim_in=64, dim_out=128):
+        """
+        Initialize the Downsampling Layer with a convolutional projection.
+        """
         super().__init__()
         self.img_size = img_size
         self.proj = nn.Conv2d(dim_in, dim_out, kernel_size=2, stride=2)
 
     def forward(self, x):
+        """
+        Forward pass to downsample the input feature map.
+        """
         B, N, C = x.size()
         x = x.view(B, self.img_size, self.img_size, C).permute(0, 3, 1, 2)
         x = self.proj(x).permute(0, 2, 3, 1)
@@ -184,6 +214,10 @@ class GFNetPyramid(nn.Module):
         init_values=0.001,
         dropcls=0,
     ):
+        """
+        Initialize the GFNetPyramid model with multiple stages of GFNet blocks.
+        The steps include patch embedding, downsampling layers, and classification head.
+        """
         super().__init__()
         self.num_classes = num_classes
         self.num_features = self.embed_dim = embed_dim[-1]
@@ -247,6 +281,9 @@ class GFNetPyramid(nn.Module):
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
+        """
+        Initialize weights for Linear and LayerNorm layers.
+        """
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=0.02)
             if m.bias is not None:
@@ -256,6 +293,9 @@ class GFNetPyramid(nn.Module):
             nn.init.constant_(m.weight, 1.0)
 
     def forward_features(self, x):
+        """
+        Forward pass through the feature extraction layers of GFNetPyramid.
+        """
         for i in range(4):
             x = self.patch_embed[i](x)
             if i == 0:
@@ -266,6 +306,9 @@ class GFNetPyramid(nn.Module):
         return self.norm(x).mean(1)  # Global Average Pooling
 
     def forward(self, x):
+        """
+        Forward pass through the entire GFNetPyramid model.
+        """
         x = self.forward_features(x)
         x = self.final_dropout(x)
         x = self.head(x)
