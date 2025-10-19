@@ -11,3 +11,5 @@ GFNet is a new neural network architecture that replaces the normal local convol
 Basically, GFNet treats the image as a global signal and learns how to manipulate its frequency components directly, rather than relying on local spatial features extracted by small convolutional kernels.
 
 This allows GFNet to model global relationships across the entire image in a single operation. As a result, it achieves a balance between the efficiency of CNNs and the long range dependency modelling of transformers.
+
+In this project, we will be using the GFNetPyramid model (which uses a hierarchical architecture to learn smaller details of the image in the early layers and more abstract, global features in the later layers) instead of the standard GFNet model.
