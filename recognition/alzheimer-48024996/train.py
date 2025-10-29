@@ -15,6 +15,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 from dataset import AlzheimerDataset
 from modules import GFNetPyramid
@@ -77,6 +78,40 @@ def evaluate(model, data_loader, criterion, device):
     avg_loss = total_loss / len(data_loader)
     avg_accuracy = 100 * correct_predictions / total_samples
     return avg_loss, avg_accuracy
+
+
+def plot_metrics(train_losses, val_losses, val_accuracies, output_dir):
+    """
+    Saves plots for training/validation loss and validation accuracy.
+    """
+    epochs = range(1, len(train_losses) + 1)
+
+    # Plot Loss
+    plt.figure(figsize=(10, 5))
+    plt.plot(epochs, train_losses, "b-", label="Training Loss")
+    plt.plot(epochs, val_losses, "r-", label="Validation Loss")
+    plt.title("Training and Validation Loss")
+    plt.xlabel("Epochs")
+    plt.ylabel("Loss")
+    plt.legend()
+    plt.grid(True)
+    loss_plot_path = os.path.join(output_dir, "loss_plot.png")
+    plt.savefig(loss_plot_path)
+    plt.close()
+
+    # Plot Accuracy
+    plt.figure(figsize=(10, 5))
+    plt.plot(epochs, val_accuracies, "g-", label="Validation Accuracy")
+    plt.title("Validation Accuracy")
+    plt.xlabel("Epochs")
+    plt.ylabel("Accuracy (%)")
+    plt.legend()
+    plt.grid(True)
+    acc_plot_path = os.path.join(output_dir, "accuracy_plot.png")
+    plt.savefig(acc_plot_path)
+    plt.close()
+
+    print(f"\nMetrics plots saved to {output_dir}")
 
 
 def main(args):
@@ -153,6 +188,11 @@ def main(args):
     best_accuracy = 0.0
     start_time = time.time()
 
+    # Lists to store metrics for plotting
+    train_losses = []
+    val_losses = []
+    val_accuracies = []
+
     print(f"Starting training for {args.epochs} epochs...")
     for epoch in range(args.epochs):
         print(f"\n--- Epoch {epoch+1}/{args.epochs} ---")
@@ -164,6 +204,11 @@ def main(args):
         print(
             f"Epoch {epoch+1} Validation Loss: {val_loss:.4f}, Validation Accuracy: {val_accuracy:.2f}%"
         )
+
+        # Append metrics for plotting
+        train_losses.append(train_loss)
+        val_losses.append(val_loss)
+        val_accuracies.append(val_accuracy)
 
         # Save the best model
         if val_accuracy > best_accuracy:
@@ -178,6 +223,9 @@ def main(args):
     total_time = time.time() - start_time
     print(f"\nTraining finished in {total_time/60:.2f} minutes.")
     print(f"Best validation accuracy: {best_accuracy:.2f}%")
+
+    # Plot and save metrics
+    plot_metrics(train_losses, val_losses, val_accuracies, args.output_dir)
 
 
 if __name__ == "__main__":
@@ -194,7 +242,7 @@ if __name__ == "__main__":
         "--output-dir",
         type=str,
         default="checkpoints",
-        help="Directory to save model checkpoints.",
+        help="Directory to save model checkpoints and plots.",
     )
     parser.add_argument("--img-size", type=int, default=224, help="Input image size.")
     parser.add_argument(

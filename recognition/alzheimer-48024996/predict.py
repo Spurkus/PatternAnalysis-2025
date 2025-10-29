@@ -2,6 +2,7 @@ import argparse
 import torch
 from PIL import Image
 from torchvision import transforms
+import matplotlib.pyplot as plt
 
 from modules import GFNetPyramid
 
@@ -72,9 +73,31 @@ def predict(args):
 
     predicted_class = class_names[predicted_idx.item()]
 
-    print("\n--- Prediction Result ---")
+    print("\n--- Prediction Probabilities ---")
+    for i, class_name in enumerate(class_names):
+        print(f"{class_name}: {probabilities[i].item() * 100:.2f}%")
+
+    print("\n--- Final Prediction ---")
     print(f"Predicted Class: {predicted_class}")
     print(f"Confidence: {confidence.item() * 100:.2f}%")
+
+    if not args.no_plot:
+        try:
+            plt.figure(figsize=(6, 7))
+            plt.imshow(image)
+            # Create a title string with the prediction and confidence
+            title_str = (
+                f"Prediction: {predicted_class}\n"
+                f"Confidence: {confidence.item() * 100:.2f}%"
+            )
+            plt.title(title_str, fontsize=14)
+            plt.axis("off")  # Hide axes
+            print("\nDisplaying prediction plot... (Close the window to exit)")
+            plt.show()
+        except Exception as e:
+            # Handle cases where GUI is not available (e.g., SSH terminal)
+            print(f"\nCould not display plot. Error: {e}")
+            print("To disable this, run with the --no-plot flag.")
 
 
 if __name__ == "__main__":
@@ -92,6 +115,12 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--img-size", type=int, default=224, help="Image size the model was trained on."
+    )
+    # Added argument to disable plotting
+    parser.add_argument(
+        "--no-plot",
+        action="store_true",
+        help="Disable showing the image plot visualization.",
     )
 
     args = parser.parse_args()
