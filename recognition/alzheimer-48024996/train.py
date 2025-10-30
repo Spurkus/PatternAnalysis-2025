@@ -16,31 +16,40 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+from torch.cuda.amp import autocast
 
 from dataset import AlzheimerDataset
 from modules import GFNetPyramid
 
 
-def train_one_epoch(model, data_loader, optimizer, criterion, device):
+def train_one_epoch(model, data_loader, optimizer, criterion, device, scaler):
     """
     Trains the model for one epoch.
     """
     model.train()
     total_loss = 0
 
-    # Using tqdm for a progress bar
     progress_bar = tqdm(data_loader, desc="Training", unit="batch")
     for images, labels in progress_bar:
         images, labels = images.to(device), labels.to(device)
 
-        # Forward pass
-        outputs = model(images)
-        loss = criterion(outputs, labels)
+        # Forward pass with autocast
+        with autocast():
+            outputs = model(images)
+            loss = criterion(outputs, labels)
 
         # Backward pass and optimization
         optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+
+        # Scale the loss and call backward()
+        scaler.scale(loss).backward()
+
+        # Unscales gradients and calls optimizer.step()
+        scaler.step(optimizer)
+
+        # Updates the scale for next iteration
+        scaler.update()
+        # ---
 
         total_loss += loss.item()
         progress_bar.set_postfix(loss=loss.item())
@@ -63,9 +72,10 @@ def evaluate(model, data_loader, criterion, device):
         images, labels = images.to(device), labels.to(device)
 
         # Forward pass
-        outputs = model(images)
-        loss = criterion(outputs, labels)
-        total_loss += loss.item()
+        with autocast():
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            total_loss += loss.item()
 
         # Calculate accuracy
         _, predicted = torch.max(outputs.data, 1)
@@ -80,7 +90,7 @@ def evaluate(model, data_loader, criterion, device):
     return avg_loss, avg_accuracy
 
 
-def plot_metrics(train_losses, val_losses, val_accuracies, output_dir):
+def plot_metrics(train_losses, val_losses, val_accuracies, learning_rates, output_dir):
     """
     Saves plots for training/validation loss and validation accuracy.
     """
@@ -111,6 +121,18 @@ def plot_metrics(train_losses, val_losses, val_accuracies, output_dir):
     plt.savefig(acc_plot_path)
     plt.close()
 
+    # Plot Learning Rate
+    plt.figure(figsize=(10, 5))
+    plt.plot(epochs, learning_rates, "m-", label="Learning Rate")
+    plt.title("Learning Rate Schedule")
+    plt.xlabel("Epochs")
+    plt.ylabel("Learning Rate")
+    plt.legend()
+    plt.grid(True)
+    lr_plot_path = os.path.join(output_dir, "learning_rate_plot.png")
+    plt.savefig(lr_plot_path)
+    plt.close()
+
     print(f"\nMetrics plots saved to {output_dir}")
 
 
@@ -127,8 +149,10 @@ def main(args):
     data_transforms = {
         "train": transforms.Compose(
             [
-                transforms.Resize((args.img_size, args.img_size)),
+                transforms.RandomResizedCrop(args.img_size, scale=(0.8, 1.0)),
                 transforms.RandomHorizontalFlip(),
+                transforms.RandomRotation(15),
+                transforms.RandAugment(),
                 transforms.ToTensor(),
                 transforms.Normalize(
                     mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
@@ -157,10 +181,18 @@ def main(args):
 
     # Create data loaders
     train_loader = DataLoader(
-        train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=4,
+        pin_memory=True,
     )
     test_loader = DataLoader(
-        test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4
+        test_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=4,
+        pin_memory=True,
     )
     print("Datasets loaded successfully.")
 
@@ -177,12 +209,19 @@ def main(args):
         num_classes=2,  # Binary classification: NC vs AD
     ).to(device)
 
+    model = torch.compile(model, mode="max-autotune")
+
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Number of trainable parameters: {n_parameters / 1e6:.2f}M")
 
-    # Loss function and optimizer
-    criterion = nn.CrossEntropyLoss()
+    # Loss function, optimizer, and scheduler
+    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.05)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=args.epochs, eta_min=1e-6
+    )
+
+    scaler = torch.cuda.amp.GradScaler()  # For mixed precision training
 
     # Training loop
     best_accuracy = 0.0
@@ -192,12 +231,15 @@ def main(args):
     train_losses = []
     val_losses = []
     val_accuracies = []
+    learning_rates = []
 
     print(f"Starting training for {args.epochs} epochs...")
     for epoch in range(args.epochs):
         print(f"\n--- Epoch {epoch+1}/{args.epochs} ---")
 
-        train_loss = train_one_epoch(model, train_loader, optimizer, criterion, device)
+        train_loss = train_one_epoch(
+            model, train_loader, optimizer, criterion, device, scaler
+        )
         print(f"Epoch {epoch+1} Average Training Loss: {train_loss:.4f}")
 
         val_loss, val_accuracy = evaluate(model, test_loader, criterion, device)
@@ -205,10 +247,13 @@ def main(args):
             f"Epoch {epoch+1} Validation Loss: {val_loss:.4f}, Validation Accuracy: {val_accuracy:.2f}%"
         )
 
+        scheduler.step()
+
         # Append metrics for plotting
         train_losses.append(train_loss)
         val_losses.append(val_loss)
         val_accuracies.append(val_accuracy)
+        learning_rates.append(optimizer.param_groups[0]["lr"])
 
         # Save the best model
         if val_accuracy > best_accuracy:
@@ -225,7 +270,9 @@ def main(args):
     print(f"Best validation accuracy: {best_accuracy:.2f}%")
 
     # Plot and save metrics
-    plot_metrics(train_losses, val_losses, val_accuracies, args.output_dir)
+    plot_metrics(
+        train_losses, val_losses, val_accuracies, learning_rates, args.output_dir
+    )
 
 
 if __name__ == "__main__":
