@@ -28,12 +28,12 @@ def predict(args):
     print("Initializing GFNetPyramid model...")
     model = GFNetPyramid(
         img_size=args.img_size,
-        patch_size=4,
+        patch_size=16,
         embed_dim=[64, 128, 256, 512],
-        depth=[3, 3, 10, 3],
+        depth=[3, 3, 9, 3],
         mlp_ratio=[4, 4, 4, 4],
-        drop_path_rate=0.1,
-        num_classes=2,
+        drop_path_rate=0.15,
+        num_classes=1,
     ).to(device)
 
     # Load the trained model weights

@@ -18,6 +18,7 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 from dataset import AlzheimerDataset
 from modules import GFNetPyramid
+from modules import Mixup
 
 
 def train_one_epoch(model, data_loader, optimizer, criterion, device, scaler, mixup_fn=None):
@@ -156,6 +157,7 @@ def main(args):
                 transforms.RandomResizedCrop(args.img_size, scale=(0.8, 1.0)),
                 transforms.RandomHorizontalFlip(),
                 transforms.RandomRotation(15),
+                transforms.RandAugment(),
                 transforms.ToTensor(),
                 transforms.Normalize(
                     mean=[0.5], std=[0.5]
@@ -183,13 +185,46 @@ def main(args):
     )
 
     # Create data loaders
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=4,
-        pin_memory=True,
-    )
+    # Split a validation set from the training data (held-out) so we don't evaluate on the test set during training
+    full_train_len = len(train_dataset)
+    val_len = int(full_train_len * args.val_split)
+    train_len = full_train_len - val_len
+
+    if val_len > 0 and train_len > 0:
+        # Reproducible split
+        generator = torch.Generator()
+        generator.manual_seed(args.seed)
+        train_subset, val_subset = torch.utils.data.random_split(
+            train_dataset, [train_len, val_len], generator=generator
+        )
+
+        train_loader = DataLoader(
+            train_subset,
+            batch_size=args.batch_size,
+            shuffle=True,
+            num_workers=4,
+            pin_memory=True,
+        )
+        val_loader = DataLoader(
+            val_subset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=4,
+            pin_memory=True,
+        )
+        print(f"Training samples: {train_len}, Validation samples: {val_len}")
+    else:
+        # Fallback: use the entire training set and use the test set as validation (not recommended)
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=args.batch_size,
+            shuffle=True,
+            num_workers=4,
+            pin_memory=True,
+        )
+        val_loader = None
+        print("No validation split requested or dataset too small; continuing without a dedicated validation set.")
+
     test_loader = DataLoader(
         test_dataset,
         batch_size=args.batch_size,
@@ -204,9 +239,9 @@ def main(args):
     print("Initializing GFNetPyramid model...")
     model = GFNetPyramid(
         img_size=args.img_size,
-        patch_size=4,
-        embed_dim=[64, 128, 200, 256],
-        depth=[2, 2, 6, 2],
+        patch_size=16,
+        embed_dim=[64, 128, 256, 512],
+        depth=[3, 3, 9, 3],
         mlp_ratio=[4, 4, 4, 4],
         drop_path_rate=0.15,
         num_classes=1,
@@ -217,18 +252,36 @@ def main(args):
 
     # Loss function, optimizer, and scheduler
     criterion = nn.BCEWithLogitsLoss()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=5e-4)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=20, eta_min=1e-6
+    warmup_epochs = 10
+    print(f"Using {warmup_epochs}-epoch linear warmup + long cosine decay.")
+
+    main_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=args.epochs - warmup_epochs, eta_min=1e-6
+    )
+
+    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=1e-6, end_factor=1.0, total_iters=warmup_epochs
+    )
+
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer, schedulers=[warmup_scheduler, main_scheduler], milestones=[warmup_epochs]
     )
 
     scaler = torch.amp.GradScaler()  # For mixed precision training
 
+    print(f"Initializing Mixup with alpha={args.mixup_alpha} and prob={args.mixup_prob}")
+    mixup_fn = Mixup(
+        mixup_alpha=args.mixup_alpha,
+        prob=args.mixup_prob,
+        device=device
+    )
+
     # Training loop
     best_accuracy = 0.0
     start_time = time.time()
-    patience = 20
+    patience = 30
     epochs_no_improve = 0
 
     # Lists to store metrics for plotting
@@ -242,11 +295,19 @@ def main(args):
         print(f"\n--- Epoch {epoch+1}/{args.epochs} ---")
 
         train_loss = train_one_epoch(
-            model, train_loader, optimizer, criterion, device, scaler, mixup_fn=None
+            model, train_loader, optimizer, criterion, device, scaler, mixup_fn=mixup_fn
         )
         print(f"Epoch {epoch+1} Average Training Loss: {train_loss:.4f}")
 
-        val_loss, val_accuracy = evaluate(model, test_loader, criterion, device)
+        # Use the held-out validation loader during training if available
+        if val_loader is None:
+            # If no val split was created, fall back to using the test set (not ideal)
+            current_eval_loader = test_loader
+            print("Warning: No validation split - using test set for validation during training.")
+        else:
+            current_eval_loader = val_loader
+
+        val_loss, val_accuracy = evaluate(model, current_eval_loader, criterion, device)
         print(
             f"Epoch {epoch+1} Validation Loss: {val_loss:.4f}, Validation Accuracy: {val_accuracy:.2f}%"
         )
@@ -288,6 +349,17 @@ def main(args):
         train_losses, val_losses, val_accuracies, learning_rates, args.output_dir
     )
 
+    # --- Final evaluation on the test set using the best saved model ---
+    best_model_path = os.path.join(args.output_dir, "best_model.pth")
+    if os.path.exists(best_model_path):
+        print(f"\nLoading best model from {best_model_path} for final test evaluation...")
+        model.load_state_dict(torch.load(best_model_path, map_location=device))
+        model.to(device)
+        test_loss, test_accuracy = evaluate(model, test_loader, criterion, device)
+        print(f"Final Test Loss: {test_loss:.4f}, Final Test Accuracy: {test_accuracy:.2f}%")
+    else:
+        print(f"No best model found at {best_model_path}; skipping final test evaluation.")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -307,7 +379,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--img-size", type=int, default=224, help="Input image size.")
     parser.add_argument(
-        "--epochs", type=int, default=100, help="Number of training epochs."
+        "--epochs", type=int, default=200, help="Number of training epochs."
     )
     parser.add_argument(
         "--batch-size",
@@ -315,7 +387,37 @@ if __name__ == "__main__":
         default=32,
         help="Batch size for training and evaluation.",
     )
-    parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate.")
+    parser.add_argument(
+        "--mixup-alpha",
+        type=float,
+        default=0.8,
+        help="Alpha parameter for MixUp. (Default: 0.8)",
+    )
+    parser.add_argument(
+        "--mixup-prob",
+        type=float,
+        default=1.0,
+        help="Probability of applying MixUp. (Default: 1.0)",
+    )
+    parser.add_argument(
+        "--weight-decay", 
+        type=float, 
+        default=0.05,
+        help="Weight decay (L2 penalty)"
+    )
+    parser.add_argument("--lr", type=float, default=3e-5, help="Learning rate.")
+    parser.add_argument(
+        "--val-split",
+        type=float,
+        default=0.1,
+        help="Fraction of the training data to hold out for validation (e.g. 0.1).",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed used for dataset splitting.",
+    )
 
     args = parser.parse_args()
     main(args)

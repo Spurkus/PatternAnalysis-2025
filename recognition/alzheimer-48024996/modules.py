@@ -11,6 +11,7 @@ from functools import partial
 import torch
 import torch.nn as nn
 import torch.fft
+import numpy as np
 
 from timm.layers import DropPath, to_2tuple, trunc_normal_
 
@@ -314,3 +315,45 @@ class GFNetPyramid(nn.Module):
         x = self.final_dropout(x)
         x = self.head(x)
         return x
+
+class Mixup:
+    """
+    A Mixup implementation compatible with num_classes=1 and BCEWithLogitsLoss.
+    It mixes images and their corresponding float (0.0 or 1.0) labels.
+    """
+    def __init__(self, mixup_alpha=1.0, cutmix_alpha=0.0, prob=1.0, device='cuda'):
+        self.mixup_alpha = mixup_alpha
+        self.cutmix_alpha = cutmix_alpha # Note: This simple version only implements MixUp
+        self.prob = prob
+        self.device = device
+        if self.cutmix_alpha > 0:
+            print("Warning: This custom Mixup class only implements MixUp, not CutMix.")
+            print("CutMix alpha will be ignored.")
+
+    def __call__(self, x, y):
+        """
+        x: batch of images (torch.Tensor)
+        y: batch of labels (torch.Tensor, shape [batch_size])
+        """
+        if np.random.rand() > self.prob or self.mixup_alpha == 0.0:
+            return x, y
+
+        # --- MixUp ---
+        # Get a mixing ratio 'lam' from a Beta distribution
+        lam = np.random.beta(self.mixup_alpha, self.mixup_alpha)
+        
+        # Get a random permutation of indices for mixing
+        batch_size = x.size(0)
+        index = torch.randperm(batch_size, device=self.device)
+
+        # Mix images
+        # mixed_x = lam * x (image A) + (1 - lam) * x[index, :] (image B)
+        mixed_x = lam * x + (1 - lam) * x[index, :]
+        
+        # Mix labels
+        # y_a = label for image A, y_b = label for image B
+        y_a, y_b = y, y[index]
+        # mixed_y = lam * y_a + (1 - lam) * y_b
+        mixed_y = (lam * y_a + (1 - lam) * y_b)
+        
+        return mixed_x, mixed_y
