@@ -143,7 +143,7 @@ class PatchEmbed(nn.Module):
     Image to Patch Embedding using a single convolutional layer.
     """
 
-    def __init__(self, img_size=224, patch_size=16, in_chans=3, embed_dim=768):
+    def __init__(self, img_size=224, patch_size=16, in_chans=1, embed_dim=768):
         """
         Initialize the Patch Embedding layer.
         """
@@ -227,7 +227,7 @@ class GFNetPyramid(nn.Module):
         # Initial Patch Embedding
         self.patch_embed = nn.ModuleList()
         first_patch_embed = PatchEmbed(
-            img_size=img_size, patch_size=patch_size, in_chans=3, embed_dim=embed_dim[0]
+            img_size=img_size, patch_size=patch_size, in_chans=1, embed_dim=embed_dim[0]
         )
         self.patch_embed.append(first_patch_embed)
         self.pos_embed = nn.Parameter(

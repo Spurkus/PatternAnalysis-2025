@@ -84,8 +84,7 @@ class AlzheimerDataset(Dataset):
         img_path, label = self.samples[idx]
 
         # Open the image using Pillow
-        # It's good practice to convert to RGB to handle grayscale images
-        image = Image.open(img_path).convert("RGB")
+        image = Image.open(img_path).convert("L")
 
         # Apply transformations if they are provided
         if self.transform:

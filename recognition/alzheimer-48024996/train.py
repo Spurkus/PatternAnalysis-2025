@@ -20,7 +20,7 @@ from dataset import AlzheimerDataset
 from modules import GFNetPyramid
 
 
-def train_one_epoch(model, data_loader, optimizer, criterion, device, scaler):
+def train_one_epoch(model, data_loader, optimizer, criterion, device, scaler, mixup_fn=None):
     """
     Trains the model for one epoch.
     """
@@ -29,11 +29,15 @@ def train_one_epoch(model, data_loader, optimizer, criterion, device, scaler):
 
     progress_bar = tqdm(data_loader, desc="Training", unit="batch")
     for images, labels in progress_bar:
-        images, labels = images.to(device), labels.to(device)
+        images, labels = images.to(device), labels.float().to(device)
+
+        if mixup_fn is not None:
+            images, labels = mixup_fn(images, labels)
 
         # Forward pass with autocast
         with torch.amp.autocast(device_type='cuda'):
             outputs = model(images)
+            outputs = outputs.squeeze(1)
             loss = criterion(outputs, labels)
 
         # Backward pass and optimization
@@ -67,16 +71,18 @@ def evaluate(model, data_loader, criterion, device):
 
     progress_bar = tqdm(data_loader, desc="Evaluating", unit="batch")
     for images, labels in progress_bar:
-        images, labels = images.to(device), labels.to(device)
+        images, labels = images.to(device), labels.float().to(device)
 
         # Forward pass
         with torch.amp.autocast(device_type='cuda'):
             outputs = model(images)
+            outputs = outputs.squeeze(1)
             loss = criterion(outputs, labels)
-            total_loss += loss.item()
+
+        total_loss += loss.item()
 
         # Calculate accuracy
-        _, predicted = torch.max(outputs.data, 1)
+        predicted = (outputs.data >= 0).float()
         total_samples += labels.size(0)
         correct_predictions += (predicted == labels).sum().item()
 
@@ -150,10 +156,9 @@ def main(args):
                 transforms.RandomResizedCrop(args.img_size, scale=(0.8, 1.0)),
                 transforms.RandomHorizontalFlip(),
                 transforms.RandomRotation(15),
-                transforms.RandAugment(),
                 transforms.ToTensor(),
                 transforms.Normalize(
-                    mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+                    mean=[0.5], std=[0.5]
                 ),
             ]
         ),
@@ -162,7 +167,7 @@ def main(args):
                 transforms.Resize((args.img_size, args.img_size)),
                 transforms.ToTensor(),
                 transforms.Normalize(
-                    mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+                    mean=[0.5], std=[0.5]
                 ),
             ]
         ),
@@ -200,21 +205,22 @@ def main(args):
     model = GFNetPyramid(
         img_size=args.img_size,
         patch_size=4,
-        embed_dim=[64, 128, 256, 512],
-        depth=[3, 3, 10, 3],
+        embed_dim=[64, 128, 200, 256],
+        depth=[2, 2, 6, 2],
         mlp_ratio=[4, 4, 4, 4],
-        drop_path_rate=0.1,
-        num_classes=2,  # Binary classification: NC vs AD
+        drop_path_rate=0.15,
+        num_classes=1,
     ).to(device)
 
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Number of trainable parameters: {n_parameters / 1e6:.2f}M")
 
     # Loss function, optimizer, and scheduler
-    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.05)
+    criterion = nn.BCEWithLogitsLoss()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=5e-4)
+
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=args.epochs, eta_min=1e-6
+        optimizer, T_max=20, eta_min=1e-6
     )
 
     scaler = torch.amp.GradScaler()  # For mixed precision training
@@ -222,6 +228,8 @@ def main(args):
     # Training loop
     best_accuracy = 0.0
     start_time = time.time()
+    patience = 20
+    epochs_no_improve = 0
 
     # Lists to store metrics for plotting
     train_losses = []
@@ -234,7 +242,7 @@ def main(args):
         print(f"\n--- Epoch {epoch+1}/{args.epochs} ---")
 
         train_loss = train_one_epoch(
-            model, train_loader, optimizer, criterion, device, scaler
+            model, train_loader, optimizer, criterion, device, scaler, mixup_fn=None
         )
         print(f"Epoch {epoch+1} Average Training Loss: {train_loss:.4f}")
 
@@ -260,6 +268,16 @@ def main(args):
             torch.save(
                 model.state_dict(), os.path.join(args.output_dir, "best_model.pth")
             )
+            epochs_no_improve = 0
+        else:
+            epochs_no_improve += 1
+
+        # Early stopping
+        if epochs_no_improve >= patience:
+            print(
+                f"No improvement for {patience} consecutive epochs. Early stopping..."
+            )
+            break
 
     total_time = time.time() - start_time
     print(f"\nTraining finished in {total_time/60:.2f} minutes.")
@@ -289,7 +307,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--img-size", type=int, default=224, help="Input image size.")
     parser.add_argument(
-        "--epochs", type=int, default=50, help="Number of training epochs."
+        "--epochs", type=int, default=100, help="Number of training epochs."
     )
     parser.add_argument(
         "--batch-size",
@@ -297,7 +315,7 @@ if __name__ == "__main__":
         default=32,
         help="Batch size for training and evaluation.",
     )
-    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate.")
+    parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate.")
 
     args = parser.parse_args()
     main(args)
