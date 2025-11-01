@@ -16,8 +16,6 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-from torch.cuda.amp import autocast
-
 from dataset import AlzheimerDataset
 from modules import GFNetPyramid
 
@@ -34,7 +32,7 @@ def train_one_epoch(model, data_loader, optimizer, criterion, device, scaler):
         images, labels = images.to(device), labels.to(device)
 
         # Forward pass with autocast
-        with autocast():
+        with torch.amp.autocast(device_type='cuda'):
             outputs = model(images)
             loss = criterion(outputs, labels)
 
@@ -72,7 +70,7 @@ def evaluate(model, data_loader, criterion, device):
         images, labels = images.to(device), labels.to(device)
 
         # Forward pass
-        with autocast():
+        with torch.amp.autocast(device_type='cuda'):
             outputs = model(images)
             loss = criterion(outputs, labels)
             total_loss += loss.item()
@@ -209,8 +207,6 @@ def main(args):
         num_classes=2,  # Binary classification: NC vs AD
     ).to(device)
 
-    model = torch.compile(model, mode="max-autotune")
-
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Number of trainable parameters: {n_parameters / 1e6:.2f}M")
 
@@ -221,7 +217,7 @@ def main(args):
         optimizer, T_max=args.epochs, eta_min=1e-6
     )
 
-    scaler = torch.cuda.amp.GradScaler()  # For mixed precision training
+    scaler = torch.amp.GradScaler()  # For mixed precision training
 
     # Training loop
     best_accuracy = 0.0
