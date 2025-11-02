@@ -107,7 +107,7 @@ The following plots show the model's performance during training on the training
 ![Learning Rate Schedule](checkpoints/learning_rate_plot.png)
 
 ### Final Test Set Performance
-After training, the we run the model with the best validation accuracy ($75.79\%$) on on the **test set**.
+After training, the we run the model with the best validation accuracy (`0.7579`) on on the **test set**.
 
 * **Final Test Loss:** `0.5175`
 * **Final Test Accuracy:** `0.7434`
