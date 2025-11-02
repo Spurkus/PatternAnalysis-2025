@@ -77,7 +77,6 @@ This project requires the following Python libraries:
 To train the model from scratch, run the `train.py` script. The data must be in a root directory (e.g., `AD_NC`) with `train` and `test` subfolders, which in turn contain `AD` and `NC` subfolders.
 
 ```bash
-# Example training command:
 python train.py \
     --data-dir AD_NC \
     --output-dir checkpoints \
@@ -92,14 +91,13 @@ python train.py \
 Use the `predict.py` script to run a prediction on a single image using your saved `best_model.pth`.
 
 ```bash
-# Example prediction command:
 python predict.py \
     --image-path /path/to/your/image.jpeg \
     --model-path checkpoints/best_model.pth
 ```
 
 ## Results and Evaluation
-The model's performance is tracked by saving the best model based on validation accuracy. The goal is to achieve an accuracy of 80% or higher on the final, held-out test set.
+The model's performance is tracked by saving the best model based on validation accuracy. The goal is to achieve an accuracy of 80% or higher on the final, held-out test set. It can be seen below that it was supposed to run 200 epochs, but it stopped early because there was not an improvement in the validation accuracy for 30 epochs.
 
 ### Training and Validation Metrics
 The following plots show the model's performance during training on the training and validation sets.
@@ -109,10 +107,10 @@ The following plots show the model's performance during training on the training
 ![Learning Rate Schedule](checkpoints/learning_rate_plot.png)
 
 ### Final Test Set Performance
-After training, the `train.py` script automatically loads the `best_model.pth` and runs a final evaluation on the **test set**.
+After training, the we run the model with the best validation accuracy ($75.79\%$) on on the **test set**.
 
-* **Final Test Loss:** `0`
-* **Final Test Accuracy:** `0`
+* **Final Test Loss:** `0.5175`
+* **Final Test Accuracy:** `0.7434`
 
 ## References
 [1] Y. Rao, W. Zhao, Z. Zhu, J. Zhou, and J. Lu, “GFNet: Global Filter Networks for Visual Recognition,” IEEE Transactions on Pattern Analysis and Machine Intelligence, vol. 45, no. 9, pp. 10 960–10 973, Sep. 2023. [Online]. Available: https://ieeexplore.ieee.org/document/10091201?denied=
